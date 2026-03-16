@@ -1,0 +1,8 @@
+python-telegram-bot[job-scheduling]==21.10
+fastapi==0.115.6
+uvicorn==0.34.0
+aiosqlite==0.20.0
+httpx==0.28.1
+python-dotenv==1.0.1
+cryptography==44.0.0
+requests==2.32.3
