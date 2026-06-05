@@ -10,6 +10,8 @@ Telegram-бот + веб-сервер для отслеживания конве
 
 AIsha Podpiski решает эту задачу: связывает ClientID Яндекс Метрики (куки на лендинге) с фактом подписки на канал и отправляет конверсию обратно в Метрику. Вы видите в отчётах, какой источник трафика приносит реальных подписчиков.
 
+> 🛠 **Разработчикам:** внутреннее устройство, потоки данных и журнал архитектурных решений — в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ---
 
 ## Как работает (схема)
@@ -102,7 +104,7 @@ python src/main.py
 
 ### Архитектура
 
-Веб-сервер запускается внутри бота (в отдельном потоке) через uvicorn. Он обслуживает единственный ключевой эндпоинт:
+Веб-сервер запускается внутри бота в том же event loop (uvicorn как asyncio-задача) — это позволяет обработчику `/go` безопасно вызывать методы Telegram-бота. Подробности в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Он обслуживает единственный ключевой эндпоинт:
 
 ```
 GET /go?cid=<ClientID>&channel=<ChatID>&platform=<telegram|max>&target=<URL>
@@ -222,6 +224,10 @@ cloudflared tunnel --url http://localhost:8080
   - Invite users (создание invite-ссылок)
   - Manage chat (чтение участников)
 - В настройках бота (@BotFather) включён **Chat Member Updates** (`/mybots → Bot Settings → Group Privacy → off`, или добавление в канал как админа достаточно)
+
+> 💡 **Авто-определение ID канала:** добавьте бота в канал администратором — он
+> пришлёт `chat_id` этого канала в личные сообщения всем администраторам
+> (`ADMIN_ID`). Останется вставить ID в «➕ Добавить канал».
 
 ---
 
@@ -417,7 +423,7 @@ AIsha-Podpiski/
 │   │   └── repository.py           # CRUD-операции
 │   ├── handlers/
 │   │   ├── admin.py                 # Telegram ConversationHandler (управление каналами)
-│   │   └── channel_events.py        # Обработка подписок → конверсии (Telegram)
+│   │   └── channel_events.py        # Подписки → конверсии (chat_member) + авто-ID (my_chat_member)
 │   ├── services/
 │   │   ├── invite_pool_service.py   # Пул invite-ссылок
 │   │   ├── max_updates_service.py   # Long-poll MAX API + конверсии MAX
@@ -427,6 +433,8 @@ AIsha-Podpiski/
 │   └── web/
 │       └── tracking_server.py       # FastAPI-сервер с эндпоинтом /go
 ├── data/                            # SQLite БД (создаётся автоматически)
+├── docs/
+│   └── ARCHITECTURE.md              # Архитектура, потоки данных, журнал решений (ADR)
 ├── .env.example                     # Шаблон переменных окружения
 ├── requirements.txt                 # Python-зависимости
 └── README.md
