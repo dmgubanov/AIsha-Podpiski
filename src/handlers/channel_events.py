@@ -1,12 +1,13 @@
 # PURPOSE: Обработка подписок на Telegram-каналы для трекинга конверсий
-# MODULE_MAP: on_channel_member_update, _delayed_conversion_check
+# MODULE_MAP: on_channel_member_update, _delayed_conversion_check, on_bot_added_to_channel
 # DEPENDS_ON: [database.repository, services.metrika_service, config]
 # USED_BY: [main]
 
+import html
 import logging
 import traceback
 
-from telegram import Update, ChatMember
+from telegram import Update, Chat, ChatMember
 from telegram.ext import ContextTypes
 
 from src.config import Config
@@ -141,12 +142,13 @@ async def _delayed_conversion_check(context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        updated = await Repository.mark_tracking_conversion(invite_url, user_id)
-        if not updated:
-            logger.debug(
-                f"[SKIP] Конверсия уже отправлена или запись не найдена: {invite_url}"
-            )
-            return
+        # Проверяем, что конверсия ещё не отправлена (без пометки — пометим после успеха)
+        if click_already_converted := await Repository.find_tracking_click_by_invite_link(invite_url):
+            if click_already_converted.conversion_sent:
+                logger.debug(
+                    f"[SKIP] Конверсия уже отправлена: {invite_url}"
+                )
+                return
 
         # Загружаем per-channel настройки Метрики
         project_counter_id = ""
@@ -172,20 +174,83 @@ async def _delayed_conversion_check(context: ContextTypes.DEFAULT_TYPE):
             mp_token=project_mp_token,
         )
 
-        if success:
-            logger.info(
-                f"[STATE] Конверсия отправлена в Метрику (после паузы). "
-                f"client_id={client_id}, user_id={user_id}"
-            )
-        else:
+        # Помечаем конверсию отправленной только после успеха — при сбое Метрики
+        # запись остаётся неотправленной и не теряется
+        if not success:
             logger.warning(
-                f"[WARN] Не удалось отправить конверсию в Метрику. "
+                f"[WARN] Не удалось отправить конверсию в Метрику, оставляем неотправленной. "
                 f"client_id={client_id}, user_id={user_id}"
             )
+            return
+
+        updated = await Repository.mark_tracking_conversion(invite_url, user_id)
+        if not updated:
+            logger.debug(
+                f"[SKIP] Конверсия уже помечена или запись не найдена: {invite_url}"
+            )
+
+        logger.info(
+            f"[STATE] Конверсия отправлена в Метрику (после паузы). "
+            f"client_id={client_id}, user_id={user_id}"
+        )
 
     except Exception as e:
         logger.error(
             f"[ERROR] Ошибка отложенной проверки конверсии. "
             f"user_id={user_id}, invite_url={invite_url}: {e}\n{traceback.format_exc()}"
         )
+# END_FUNCTION
+
+
+# START_FUNCTION: on_bot_added_to_channel
+async def on_bot_added_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Авто-определение ID канала: уведомляет админов при добавлении бота в чат.
+
+    Когда администратор добавляет бота в канал/группу (как участника или админа),
+    бот присылает chat_id в личку всем администраторам из Config.ADMIN_IDS,
+    чтобы его было удобно вставить при добавлении канала.
+
+    # CONTRACT:
+    IN: update с my_chat_member (изменился статус самого бота в чате)
+    SIDE_EFFECTS: Отправка сообщения администраторам
+    """
+    member = update.my_chat_member
+    if not member:
+        return
+
+    chat = member.chat
+    if chat.type not in (Chat.CHANNEL, Chat.SUPERGROUP, Chat.GROUP):
+        return
+
+    old_status = member.old_chat_member.status if member.old_chat_member else None
+    new_status = member.new_chat_member.status if member.new_chat_member else None
+
+    # Реагируем только на «бот стал участником/админом», а не на удаление/понижение
+    became_active = new_status in (ChatMember.ADMINISTRATOR, ChatMember.MEMBER)
+    was_active = old_status in (ChatMember.ADMINISTRATOR, ChatMember.MEMBER)
+    if not became_active or was_active:
+        return
+
+    if not Config.ADMIN_IDS or Config.ADMIN_IDS == [0]:
+        return
+
+    title = chat.title or str(chat.id)
+    role = "администратор" if new_status == ChatMember.ADMINISTRATOR else "участник"
+    text = (
+        f"✅ Бот добавлен в канал <b>{html.escape(title)}</b> ({role}).\n\n"
+        f"ID канала: <code>{chat.id}</code>\n\n"
+        f"Чтобы включить трекинг, нажмите /start → «➕ Добавить канал» и вставьте этот ID."
+    )
+
+    logger.info(
+        f"[STATE] Бот добавлен в чат. chat_id={chat.id}, title={title}, status={new_status}"
+    )
+
+    for admin_id in Config.ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(
+                f"[WARN] Не удалось уведомить админа {admin_id} о новом канале: {e}"
+            )
 # END_FUNCTION

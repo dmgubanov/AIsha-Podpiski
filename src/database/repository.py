@@ -222,23 +222,28 @@ class Repository:
 
     @staticmethod
     async def claim_pool_link(channel_id: str) -> Optional[str]:
-        """Атомарно забирает одну неистёкшую ссылку из пула."""
+        """Атомарно забирает одну неистёкшую ссылку из пула.
+
+        Использует одно выражение DELETE ... RETURNING (SQLite 3.35+), поэтому
+        два параллельных запроса не могут забрать одну и ту же ссылку.
+        """
         async with Database.get_connection() as db:
             async with db.execute(
                 """
-                SELECT id, invite_link FROM invite_link_pool
-                WHERE channel_id = ? AND expire_at > datetime('now')
-                ORDER BY created_at ASC
-                LIMIT 1
+                DELETE FROM invite_link_pool
+                WHERE id = (
+                    SELECT id FROM invite_link_pool
+                    WHERE channel_id = ? AND expire_at > datetime('now')
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                )
+                RETURNING invite_link
                 """,
                 (channel_id,),
             ) as cursor:
                 row = await cursor.fetchone()
-            if not row:
-                return None
-            await db.execute("DELETE FROM invite_link_pool WHERE id = ?", (row[0],))
             await db.commit()
-            return row[1]
+            return row[0] if row else None
 
     @staticmethod
     async def get_pool_count(channel_id: str) -> int:

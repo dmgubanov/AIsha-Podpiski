@@ -475,7 +475,7 @@ async def add_channel_platform(update: Update, context: ContextTypes.DEFAULT_TYP
         hint = (
             "Отправьте <b>chat_id</b> вашего Telegram-канала.\n\n"
             "Чтобы его узнать, добавьте бота в канал как администратора — "
-            "бот автоматически определит ID."
+            "он пришлёт вам ID канала в личные сообщения."
         )
     else:
         hint = "Отправьте <b>chat_id</b> вашего MAX-канала."

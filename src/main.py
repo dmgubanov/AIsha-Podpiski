@@ -15,7 +15,7 @@ from src.config import Config
 from src.database.core import Database
 from src.database.repository import Repository
 from src.handlers.admin import build_conversation_handler
-from src.handlers.channel_events import on_channel_member_update
+from src.handlers.channel_events import on_channel_member_update, on_bot_added_to_channel
 from src.services.invite_pool_service import InvitePoolService
 from src.services.max_updates_service import MaxUpdatesService
 from src.web.tracking_server import create_app
@@ -213,10 +213,15 @@ def main():
         ChatMemberHandler(on_channel_member_update, ChatMemberHandler.CHAT_MEMBER)
     )
 
+    # 3. Авто-определение ID канала при добавлении бота админом
+    application.add_handler(
+        ChatMemberHandler(on_bot_added_to_channel, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
+
     # Запуск
     logger.info("[START] Запуск AIsha Podpiski...")
     application.run_polling(
-        allowed_updates=["message", "callback_query", "chat_member"],
+        allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"],
         drop_pending_updates=True,
     )
 # END_FUNCTION

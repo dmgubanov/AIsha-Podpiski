@@ -26,6 +26,14 @@ class MaxUpdatesService:
         self._bot = telegram_bot
         self._api_base = Config.MAX_API_BASE_URL.rstrip("/")
         self._token = (Config.MAX_BOT_TOKEN or "").strip()
+        # Удерживаем ссылки на фоновые задачи, иначе их может собрать GC до завершения
+        self._tasks: set = set()
+
+    def _spawn(self, coro) -> None:
+        """Запускает фоновую задачу, удерживая ссылку до её завершения."""
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     # START_FUNCTION: poll_once
     async def poll_once(self):
@@ -102,7 +110,7 @@ class MaxUpdatesService:
                 f"client_id={click.client_id}, max_user_id={user_id}"
             )
 
-            asyncio.create_task(
+            self._spawn(
                 self._delayed_max_conversion_check(
                     click_id=click.id,
                     client_id=click.client_id,
@@ -149,13 +157,6 @@ class MaxUpdatesService:
                 )
                 return
 
-            updated = await Repository.mark_max_tracking_conversion(click_id)
-            if not updated:
-                logger.debug(
-                    f"[SKIP] MAX конверсия уже отправлена или запись не найдена: click_id={click_id}"
-                )
-                return
-
             # Загружаем per-channel настройки Метрики
             project_counter_id = ""
             project_mp_token = ""
@@ -180,16 +181,25 @@ class MaxUpdatesService:
                 mp_token=project_mp_token,
             )
 
-            if success:
-                logger.info(
-                    f"[STATE] MAX конверсия отправлена в Метрику. "
-                    f"client_id={client_id}, max_user_id={max_user_id}"
-                )
-            else:
+            # Помечаем конверсию отправленной только после успеха — при сбое Метрики
+            # запись остаётся неотправленной и не теряется
+            if not success:
                 logger.warning(
-                    f"[WARN] Не удалось отправить MAX конверсию в Метрику. "
+                    f"[WARN] Не удалось отправить MAX конверсию в Метрику, оставляем неотправленной. "
                     f"client_id={client_id}, max_user_id={max_user_id}"
                 )
+                return
+
+            updated = await Repository.mark_max_tracking_conversion(click_id)
+            if not updated:
+                logger.debug(
+                    f"[SKIP] MAX конверсия уже помечена или запись не найдена: click_id={click_id}"
+                )
+
+            logger.info(
+                f"[STATE] MAX конверсия отправлена в Метрику. "
+                f"client_id={client_id}, max_user_id={max_user_id}"
+            )
 
         except Exception as e:
             logger.error(

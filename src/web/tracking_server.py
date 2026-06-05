@@ -51,6 +51,14 @@ def create_app(bot: Bot, pool_service: InvitePoolService) -> FastAPI:
     """
     app = FastAPI(title="AIsha Podpiski Tracking", docs_url=None, redoc_url=None)
 
+    # Удерживаем ссылки на фоновые задачи, иначе их может собрать GC до завершения
+    background_tasks: set = set()
+
+    def _spawn_background(coro):
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
     @app.get("/health")
     async def health_check():
         """Эндпоинт проверки работоспособности."""
@@ -117,7 +125,7 @@ def create_app(bot: Bot, pool_service: InvitePoolService) -> FastAPI:
                 channel_id=target_channel,
             )
 
-            asyncio.create_task(pool_service.ensure_channel_in_pool(target_channel))
+            _spawn_background(pool_service.ensure_channel_in_pool(target_channel))
 
             return RedirectResponse(url=invite_url, status_code=302)
 
