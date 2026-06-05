@@ -6,11 +6,9 @@
 # START_IMPORTS
 import asyncio
 import logging
-import threading
 import traceback
 
 import uvicorn
-from telegram import Bot
 from telegram.ext import Application, ChatMemberHandler
 
 from src.config import Config
@@ -41,8 +39,16 @@ def setup_logging():
 
 
 # START_FUNCTION: start_tracking_web_server
-def start_tracking_web_server(app, port: int):
-    """Запускает FastAPI-сервер в отдельном потоке."""
+def start_tracking_web_server(app, port: int) -> tuple[uvicorn.Server, asyncio.Task]:
+    """Запускает FastAPI-сервер как задачу в текущем event loop (общий с ботом).
+
+    Сервер живёт в том же loop, что и Telegram-бот, поэтому обработчики /go
+    могут безопасно вызывать методы PTB Bot без межпоточных проблем
+    (httpx-клиент бота привязан к этому же loop).
+
+    # CONTRACT:
+    OUT: (server, task) — для последующей корректной остановки
+    """
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
@@ -50,9 +56,9 @@ def start_tracking_web_server(app, port: int):
         log_level="warning",
     )
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    task = asyncio.create_task(server.serve(), name="tracking_web_server")
     logger.info(f"[STATE] Tracking веб-сервер запущен на порту {port}")
+    return server, task
 # END_FUNCTION
 
 
@@ -118,10 +124,12 @@ async def post_init(application: Application):
     pool_service = InvitePoolService(bot)
     application.bot_data["pool_service"] = pool_service
 
-    # Запускаем веб-сервер трекинга
+    # Запускаем веб-сервер трекинга (в том же event loop, что и бот)
     if Config.TRACKING_BASE_URL:
         fastapi_app = create_app(bot, pool_service)
-        start_tracking_web_server(fastapi_app, Config.TRACKING_WEB_PORT)
+        server, task = start_tracking_web_server(fastapi_app, Config.TRACKING_WEB_PORT)
+        application.bot_data["web_server"] = server
+        application.bot_data["web_server_task"] = task
     else:
         logger.warning("[WARN] TRACKING_BASE_URL не задан. Веб-сервер трекинга не запущен.")
 
@@ -156,6 +164,29 @@ async def post_init(application: Application):
 # END_FUNCTION
 
 
+# START_FUNCTION: post_shutdown
+async def post_shutdown(application: Application):
+    """Корректно останавливает веб-сервер трекинга при остановке бота."""
+    server = application.bot_data.get("web_server")
+    task = application.bot_data.get("web_server_task")
+    if server is None or task is None:
+        return
+
+    server.should_exit = True
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except asyncio.TimeoutError:
+        logger.warning("[WARN] Веб-сервер не остановился за 10 сек — отменяю задачу")
+        task.cancel()
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.warning(f"[WARN] Ошибка остановки веб-сервера: {e}")
+
+    logger.info("[STATE] Веб-сервер трекинга остановлен")
+# END_FUNCTION
+
+
 # START_FUNCTION: main
 def main():
     """Точка входа."""
@@ -169,6 +200,7 @@ def main():
         Application.builder()
         .token(Config.TELEGRAM_BOT_TOKEN)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
 
