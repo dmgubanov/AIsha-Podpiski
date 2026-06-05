@@ -111,7 +111,6 @@ async def post_init(application: Application):
     """Инициализация после запуска Application."""
     # Инициализируем БД
     await Database.init_db()
-    logger.info("[STATE] База данных инициализирована")
 
     bot = application.bot
 

@@ -1,6 +1,6 @@
 # PURPOSE: Long-poll MAX updates и трекинг конверсий подписок MAX
 # MODULE_MAP: MaxUpdatesService
-# DEPENDS_ON: [config, database.repository, services.metrika_service]
+# DEPENDS_ON: [config, database.repository, services.metrika_service, httpx]
 # USED_BY: [main]
 
 import asyncio
@@ -8,7 +8,7 @@ import logging
 import traceback
 from typing import Any, Dict, List, Optional
 
-import requests
+import httpx
 
 from src.config import Config
 from src.database.repository import Repository
@@ -256,34 +256,33 @@ class MaxUpdatesService:
 
         headers_variants = self._auth_header_variants(self._token)
         last_error = None
-        for headers in headers_variants:
-            try:
-                response = await asyncio.to_thread(
-                    requests.request,
-                    method,
-                    url,
-                    params=params,
-                    headers=headers,
-                    timeout=timeout,
-                )
-                if response.status_code in (401, 403):
-                    last_error = f"auth_{response.status_code}"
-                    continue
-                if response.status_code >= 400:
-                    logger.warning(
-                        "[MAX-API] Ошибка %s для %s %s: %s",
-                        response.status_code, method, url, response.text[:300],
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for headers in headers_variants:
+                try:
+                    response = await client.request(
+                        method,
+                        url,
+                        params=params,
+                        headers=headers,
                     )
+                    if response.status_code in (401, 403):
+                        last_error = f"auth_{response.status_code}"
+                        continue
+                    if response.status_code >= 400:
+                        logger.warning(
+                            "[MAX-API] Ошибка %s для %s %s: %s",
+                            response.status_code, method, url, response.text[:300],
+                        )
+                        return None
+                    data = response.json()
+                    if isinstance(data, dict):
+                        return data
+                    if isinstance(data, list):
+                        return {"updates": data}
                     return None
-                data = response.json()
-                if isinstance(data, dict):
-                    return data
-                if isinstance(data, list):
-                    return {"updates": data}
-                return None
-            except Exception as exc:
-                last_error = str(exc)
-                continue
+                except Exception as exc:
+                    last_error = str(exc)
+                    continue
 
         if last_error:
             logger.warning("[MAX-API] Запрос неудачен: %s %s: %s", method, url, last_error)

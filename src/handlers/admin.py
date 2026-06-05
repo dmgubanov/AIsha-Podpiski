@@ -45,6 +45,62 @@ def _is_admin(user_id: int) -> bool:
 # END_FUNCTION
 
 
+# START_FUNCTION: _build_channel_detail_view
+def _build_channel_detail_view(channel) -> tuple[str, InlineKeyboardMarkup]:
+    """Собирает текст и клавиатуру экрана деталей канала.
+
+    # CONTRACT:
+    IN: channel — модель Channel
+    OUT: (text, reply_markup) для отправки/редактирования сообщения
+    """
+    cipher = TokenCipher()
+    raw_token = cipher.decrypt(channel.metrika_token) if channel.metrika_token else ""
+    token_display = (
+        f"{raw_token[:4]}...{raw_token[-4:]}"
+        if raw_token and len(raw_token) > 8
+        else ("задан" if raw_token else "не задан")
+    )
+    counter_display = channel.metrika_counter_id or "не задан"
+    tracking_base = Config.TRACKING_BASE_URL or "не настроен"
+    icon = "📢" if channel.platform == "telegram" else "💬"
+
+    text_parts = [
+        f"{icon} <b>{html.escape(channel.name or channel.channel_id)}</b>\n",
+        f"Платформа: <b>{channel.platform.upper()}</b>",
+        f"ID канала: <code>{channel.channel_id}</code>",
+        f"📈 Счётчик Метрики: <b>{counter_display}</b>",
+        f"🔑 Токен Метрики: <b>{token_display}</b>",
+    ]
+
+    if channel.metrika_counter_id:
+        if channel.platform == "telegram":
+            text_parts.extend([
+                "",
+                "<b>Ваша трекинг-ссылка:</b>",
+                f"<code>{tracking_base}/go?cid=CLIENT_ID&amp;channel={channel.channel_id}</code>",
+            ])
+        else:
+            text_parts.extend([
+                "",
+                "<b>Ваша трекинг-ссылка (MAX):</b>",
+                f"<code>{tracking_base}/go?cid=CLIENT_ID&amp;platform=max"
+                f"&amp;channel={channel.channel_id}&amp;target=ССЫЛКА_НА_КАНАЛ</code>",
+            ])
+    else:
+        text_parts.append("\n⚠️ Настройте счётчик и токен Метрики для активации трекинга.")
+
+    keyboard = [
+        [InlineKeyboardButton("📈 Указать счётчик Метрики", callback_data="set_metrika_counter")],
+        [InlineKeyboardButton("🔑 Указать токен Метрики", callback_data="set_metrika_token")],
+        [InlineKeyboardButton("📖 Инструкция", callback_data="show_instruction")],
+        [InlineKeyboardButton("🗑 Удалить канал", callback_data="delete_channel")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="channel_list")],
+    ]
+
+    return "\n".join(text_parts), InlineKeyboardMarkup(keyboard)
+# END_FUNCTION
+
+
 # START_FUNCTION: start_command
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start — приветствие и главное меню."""
@@ -137,54 +193,10 @@ async def channel_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Канал не найден.")
         return CHANNEL_LIST
 
-    cipher = TokenCipher()
-    raw_token = cipher.decrypt(channel.metrika_token) if channel.metrika_token else ""
-    token_display = (
-        f"{raw_token[:4]}...{raw_token[-4:]}"
-        if raw_token and len(raw_token) > 8
-        else ("задан" if raw_token else "не задан")
-    )
-    counter_display = channel.metrika_counter_id or "не задан"
-    tracking_base = Config.TRACKING_BASE_URL or "не настроен"
-    icon = "📢" if channel.platform == "telegram" else "💬"
-
-    text_parts = [
-        f"{icon} <b>{html.escape(channel.name or channel.channel_id)}</b>\n",
-        f"Платформа: <b>{channel.platform.upper()}</b>",
-        f"ID канала: <code>{channel.channel_id}</code>",
-        f"📈 Счётчик Метрики: <b>{counter_display}</b>",
-        f"🔑 Токен Метрики: <b>{token_display}</b>",
-    ]
-
-    # JS-сниппет
-    if channel.metrika_counter_id:
-        if channel.platform == "telegram":
-            text_parts.extend([
-                "",
-                f"<b>Ваша трекинг-ссылка:</b>",
-                f"<code>{tracking_base}/go?cid=CLIENT_ID&amp;channel={channel.channel_id}</code>",
-            ])
-        elif channel.platform == "max":
-            text_parts.extend([
-                "",
-                f"<b>Ваша трекинг-ссылка (MAX):</b>",
-                f"<code>{tracking_base}/go?cid=CLIENT_ID&amp;platform=max"
-                f"&amp;channel={channel.channel_id}&amp;target=ССЫЛКА_НА_КАНАЛ</code>",
-            ])
-    else:
-        text_parts.append("\n⚠️ Настройте счётчик и токен Метрики для активации трекинга.")
-
-    keyboard = [
-        [InlineKeyboardButton("📈 Указать счётчик Метрики", callback_data="set_metrika_counter")],
-        [InlineKeyboardButton("🔑 Указать токен Метрики", callback_data="set_metrika_token")],
-        [InlineKeyboardButton("📖 Инструкция", callback_data="show_instruction")],
-        [InlineKeyboardButton("🗑 Удалить канал", callback_data="delete_channel")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="channel_list")],
-    ]
-
+    text, reply_markup = _build_channel_detail_view(channel)
     await query.edit_message_text(
-        "\n".join(text_parts),
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        text,
+        reply_markup=reply_markup,
         parse_mode="HTML",
     )
     return CHANNEL_DETAIL
@@ -574,54 +586,11 @@ async def _return_to_channel_detail(
     if not channel:
         return MAIN_MENU
 
-    cipher = TokenCipher()
-    raw_token = cipher.decrypt(channel.metrika_token) if channel.metrika_token else ""
-    token_display = (
-        f"{raw_token[:4]}...{raw_token[-4:]}"
-        if raw_token and len(raw_token) > 8
-        else ("задан" if raw_token else "не задан")
-    )
-    counter_display = channel.metrika_counter_id or "не задан"
-    tracking_base = Config.TRACKING_BASE_URL or "не настроен"
-    icon = "📢" if channel.platform == "telegram" else "💬"
-
-    text_parts = [
-        f"{icon} <b>{html.escape(channel.name or channel.channel_id)}</b>\n",
-        f"Платформа: <b>{channel.platform.upper()}</b>",
-        f"ID канала: <code>{channel.channel_id}</code>",
-        f"📈 Счётчик Метрики: <b>{counter_display}</b>",
-        f"🔑 Токен Метрики: <b>{token_display}</b>",
-    ]
-
-    if channel.metrika_counter_id:
-        if channel.platform == "telegram":
-            text_parts.extend([
-                "",
-                f"<b>Ваша трекинг-ссылка:</b>",
-                f"<code>{tracking_base}/go?cid=CLIENT_ID&amp;channel={channel.channel_id}</code>",
-            ])
-        else:
-            text_parts.extend([
-                "",
-                f"<b>Ваша трекинг-ссылка (MAX):</b>",
-                f"<code>{tracking_base}/go?cid=CLIENT_ID&amp;platform=max"
-                f"&amp;channel={channel.channel_id}&amp;target=ССЫЛКА_НА_КАНАЛ</code>",
-            ])
-    else:
-        text_parts.append("\n⚠️ Настройте счётчик и токен Метрики для активации трекинга.")
-
-    keyboard = [
-        [InlineKeyboardButton("📈 Указать счётчик Метрики", callback_data="set_metrika_counter")],
-        [InlineKeyboardButton("🔑 Указать токен Метрики", callback_data="set_metrika_token")],
-        [InlineKeyboardButton("📖 Инструкция", callback_data="show_instruction")],
-        [InlineKeyboardButton("🗑 Удалить канал", callback_data="delete_channel")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="channel_list")],
-    ]
-
+    text, reply_markup = _build_channel_detail_view(channel)
     msg = await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="\n".join(text_parts),
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        text=text,
+        reply_markup=reply_markup,
         parse_mode="HTML",
     )
     if msg:

@@ -50,21 +50,6 @@ class Repository:
             return cursor.lastrowid
 
     @staticmethod
-    async def get_channel(platform: str, channel_id: str) -> Optional[Channel]:
-        """Находит канал по платформе и channel_id."""
-        async with Database.get_connection() as db:
-            async with db.execute(
-                """
-                SELECT id, platform, channel_id, name, metrika_counter_id, metrika_token
-                FROM channels
-                WHERE platform = ? AND channel_id = ?
-                """,
-                (platform, channel_id),
-            ) as cursor:
-                row = await cursor.fetchone()
-                return Channel.from_row(row) if row else None
-
-    @staticmethod
     async def get_channel_by_id(channel_db_id: int) -> Optional[Channel]:
         """Находит канал по внутреннему ID."""
         async with Database.get_connection() as db:
@@ -111,17 +96,6 @@ class Repository:
             return cursor.rowcount > 0
 
     @staticmethod
-    async def update_channel_name(channel_db_id: int, name: str) -> bool:
-        """Обновляет название канала."""
-        async with Database.get_connection() as db:
-            cursor = await db.execute(
-                "UPDATE channels SET name = ? WHERE id = ?",
-                (name, channel_db_id),
-            )
-            await db.commit()
-            return cursor.rowcount > 0
-
-    @staticmethod
     async def delete_channel(channel_db_id: int) -> bool:
         """Удаляет канал."""
         async with Database.get_connection() as db:
@@ -130,23 +104,6 @@ class Repository:
             )
             await db.commit()
             return cursor.rowcount > 0
-
-    @staticmethod
-    async def get_channel_by_channel_id(channel_id: str) -> Optional[Channel]:
-        """Находит канал по channel_id (независимо от платформы). Приоритет — Telegram."""
-        async with Database.get_connection() as db:
-            async with db.execute(
-                """
-                SELECT id, platform, channel_id, name, metrika_counter_id, metrika_token
-                FROM channels
-                WHERE channel_id = ?
-                ORDER BY CASE WHEN platform = 'telegram' THEN 0 ELSE 1 END
-                LIMIT 1
-                """,
-                (channel_id,),
-            ) as cursor:
-                row = await cursor.fetchone()
-                return Channel.from_row(row) if row else None
 
     # --- Tracking Clicks (Telegram) ---
 
@@ -232,20 +189,6 @@ class Repository:
             )
             await db.commit()
             return cursor.rowcount
-
-    @staticmethod
-    async def get_expired_tracking_invite_links(max_age_hours: int = 24) -> list:
-        """Возвращает invite-ссылки из устаревших записей (для отзыва)."""
-        async with Database.get_connection() as db:
-            async with db.execute(
-                """
-                SELECT invite_link, channel_id FROM tracking_clicks
-                WHERE subscribed_user_id IS NULL
-                  AND created_at < datetime('now', ? || ' hours')
-                """,
-                (str(-max_age_hours),),
-            ) as cursor:
-                return await cursor.fetchall()
 
     @staticmethod
     async def get_active_tracking_channel_ids(max_age_hours: int = 24) -> list[str]:
